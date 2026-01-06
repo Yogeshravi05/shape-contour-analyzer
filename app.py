@@ -4,178 +4,158 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import matplotlib.pyplot as plt
-from io import BytesIO
 
-# -------------------- PAGE CONFIG --------------------
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
     page_title="Shape & Contour Analyzer",
     page_icon="🔍",
     layout="wide"
 )
 
-# -------------------- CUSTOM CSS --------------------
-st.markdown("""
-<style>
-.main {
-    background-color: #0e1117;
-}
-.metric-label {
-    font-size: 18px;
-}
-</style>
-""", unsafe_allow_html=True)
+# ---------------- TITLE ----------------
+st.title("🔍 Shape & Contour Analyzer")
+st.caption("An interactive computer vision dashboard for shape detection and feature extraction")
 
-# -------------------- SIDEBAR --------------------
-st.sidebar.title("⚙️ Controls")
-st.sidebar.markdown("Adjust parameters to improve detection")
+# ---------------- SIDEBAR ----------------
+st.sidebar.header("⚙️ Controls")
 
-blur_kernel = st.sidebar.slider("Gaussian Blur Kernel", 1, 15, 5, step=2)
-threshold_val = st.sidebar.slider("Threshold Value", 50, 255, 200)
-min_area = st.sidebar.slider("Minimum Contour Area", 100, 10000, 500)
-epsilon_factor = st.sidebar.slider("Shape Approximation Accuracy", 1, 10, 4)
+preset = st.sidebar.selectbox(
+    "Detection Preset",
+    ["Default", "Simple Shapes", "Small Objects", "Noisy Image"]
+)
+
+if preset == "Simple Shapes":
+    blur_k, thresh_v, min_area = 3, 180, 800
+elif preset == "Small Objects":
+    blur_k, thresh_v, min_area = 3, 200, 200
+elif preset == "Noisy Image":
+    blur_k, thresh_v, min_area = 7, 160, 600
+else:
+    blur_k, thresh_v, min_area = 5, 200, 500
+
+blur_k = st.sidebar.slider("Gaussian Blur Kernel", 1, 15, blur_k, step=2)
+thresh_v = st.sidebar.slider("Threshold Value", 50, 255, thresh_v)
+min_area = st.sidebar.slider("Minimum Object Area", 100, 10000, min_area)
 
 show_edges = st.sidebar.checkbox("Show Edge Detection")
-show_contours = st.sidebar.checkbox("Show Contours", value=True)
+show_pipeline = st.sidebar.checkbox("Show Processing Pipeline", value=True)
 
 st.sidebar.markdown("---")
-st.sidebar.info("Built using OpenCV + Streamlit")
+st.sidebar.info("Developed as part of Computer Vision coursework")
 
-# -------------------- TITLE --------------------
-st.title("🔍 Shape & Contour Analyzer")
-st.markdown(
-    "An **interactive computer vision dashboard** to detect shapes, count objects, "
-    "and analyze geometric features such as **area and perimeter**."
-)
-
-# -------------------- IMAGE UPLOAD --------------------
-uploaded_file = st.file_uploader(
-    "📤 Upload an Image",
-    type=["jpg", "jpeg", "png"]
-)
+# ---------------- IMAGE UPLOAD ----------------
+uploaded_file = st.file_uploader("📤 Upload an image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
-    # Load Image
+
     image = Image.open(uploaded_file).convert("RGB")
     img = np.array(image)
 
-    # -------------------- PREPROCESSING --------------------
+    # ---------------- PROCESSING ----------------
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (blur_kernel, blur_kernel), 0)
-    _, thresh = cv2.threshold(
-        blur, threshold_val, 255, cv2.THRESH_BINARY_INV
-    )
-
+    blur = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
+    _, thresh = cv2.threshold(blur, thresh_v, 255, cv2.THRESH_BINARY_INV)
     edges = cv2.Canny(blur, 100, 200)
 
-    # -------------------- CONTOUR DETECTION --------------------
-    contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     output = img.copy()
     results = []
 
-    # -------------------- SHAPE ANALYSIS --------------------
-    for idx, cnt in enumerate(contours, start=1):
+    for i, cnt in enumerate(contours, start=1):
         area = cv2.contourArea(cnt)
         if area < min_area:
             continue
 
         perimeter = cv2.arcLength(cnt, True)
-        epsilon = (epsilon_factor / 100) * perimeter
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        approx = cv2.approxPolyDP(cnt, 0.04 * perimeter, True)
 
-        # Shape Classification
         if len(approx) == 3:
             shape = "Triangle"
+            color = (255, 0, 0)
         elif len(approx) == 4:
             x, y, w, h = cv2.boundingRect(approx)
-            aspect_ratio = w / float(h)
-            shape = "Square" if 0.95 <= aspect_ratio <= 1.05 else "Rectangle"
-        elif len(approx) > 4:
-            shape = "Circle"
+            shape = "Square" if 0.95 <= w/h <= 1.05 else "Rectangle"
+            color = (0, 255, 0)
         else:
-            shape = "Unknown"
+            shape = "Circle"
+            color = (0, 0, 255)
 
-        # Draw Contours
-        if show_contours:
-            cv2.drawContours(output, [cnt], -1, (0, 255, 0), 2)
-            x, y = approx[0][0]
-            cv2.putText(
-                output, shape,
-                (x, y - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6, (255, 0, 0), 2
-            )
+        cv2.drawContours(output, [cnt], -1, color, 2)
+        x, y = approx[0][0]
+        cv2.putText(output, shape, (x, y-8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         results.append({
-            "Object ID": idx,
+            "Object ID": i,
             "Shape": shape,
             "Area (px²)": round(area, 2),
             "Perimeter (px)": round(perimeter, 2),
             "Vertices": len(approx)
         })
 
-    # -------------------- METRICS --------------------
-    col1, col2, col3 = st.columns(3)
+    df = pd.DataFrame(results)
 
-    col1.metric("🧮 Total Objects", len(results))
-    col2.metric("📐 Avg Area", round(np.mean([r["Area (px²)"] for r in results]), 2) if results else 0)
-    col3.metric("📏 Avg Perimeter", round(np.mean([r["Perimeter (px)"] for r in results]), 2) if results else 0)
+    # ---------------- TABS ----------------
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["🔍 Detection", "📊 Analytics", "📥 Export", "ℹ️ About"]
+    )
 
-    # -------------------- IMAGE DISPLAY --------------------
-    st.markdown("### 🖼️ Processed Output")
+    # -------- TAB 1: DETECTION --------
+    with tab1:
+        col1, col2 = st.columns(2)
+        col1.image(img, caption="Original Image", use_column_width=True)
+        col2.image(output, caption="Detected Shapes", use_column_width=True)
 
-    img_col1, img_col2 = st.columns(2)
+        if show_pipeline:
+            st.markdown("### 🧪 Processing Pipeline")
+            p1, p2, p3 = st.columns(3)
+            p1.image(gray, caption="Grayscale")
+            p2.image(thresh, caption="Thresholded")
+            p3.image(edges, caption="Edges")
 
-    with img_col1:
-        st.image(img, caption="Original Image", use_column_width=True)
+    # -------- TAB 2: ANALYTICS --------
+    with tab2:
+        if not df.empty:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Objects", len(df))
+            c2.metric("Most Common Shape", df["Shape"].mode()[0])
+            c3.metric("Largest Area", int(df["Area (px²)"].max()))
 
-    with img_col2:
-        st.image(output, caption="Detected Shapes", use_column_width=True)
+            st.dataframe(df, use_container_width=True)
 
-    if show_edges:
-        st.markdown("### ✴️ Edge Detection")
-        st.image(edges, caption="Canny Edges", use_column_width=True)
+            fig, ax = plt.subplots()
+            df["Shape"].value_counts().plot(kind="bar", ax=ax)
+            ax.set_title("Shape Distribution")
+            st.pyplot(fig)
+        else:
+            st.warning("No objects detected. Adjust parameters.")
 
-    # -------------------- DATA TABLE --------------------
-    if results:
-        df = pd.DataFrame(results)
-        st.markdown("### 📊 Shape Analysis Table")
-        st.dataframe(df, use_container_width=True)
+    # -------- TAB 3: EXPORT --------
+    with tab3:
+        if not df.empty:
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Analysis CSV",
+                csv,
+                "shape_analysis.csv",
+                "text/csv"
+            )
 
-        # -------------------- CHARTS --------------------
-        st.markdown("### 📈 Visual Analysis")
+    # -------- TAB 4: ABOUT --------
+    with tab4:
+        st.markdown("""
+        **Shape & Contour Analyzer**
 
-        chart_col1, chart_col2 = st.columns(2)
+        - Detects geometric shapes using contour analysis  
+        - Extracts area and perimeter features  
+        - Visualizes full image-processing pipeline  
+        - Deployed using Streamlit Cloud  
 
-        with chart_col1:
-            fig1, ax1 = plt.subplots()
-            df["Shape"].value_counts().plot(kind="bar", ax=ax1)
-            ax1.set_title("Shape Distribution")
-            ax1.set_ylabel("Count")
-            st.pyplot(fig1)
-
-        with chart_col2:
-            fig2, ax2 = plt.subplots()
-            ax2.hist(df["Area (px²)"], bins=10)
-            ax2.set_title("Area Distribution")
-            ax2.set_xlabel("Area")
-            st.pyplot(fig2)
-
-        # -------------------- EXPORT --------------------
-        st.markdown("### 📥 Export Results")
-
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download CSV Report",
-            data=csv,
-            file_name="shape_analysis.csv",
-            mime="text/csv"
-        )
-
-    else:
-        st.warning("No valid shapes detected. Try adjusting parameters.")
+        **Developed by:** Yogesh Ravi M  
+        **Technology:** Python | OpenCV | Streamlit
+        """)
 
 else:
-    st.info("Please upload an image to start analysis.")
+    st.info("Upload an image to begin analysis.")
+
